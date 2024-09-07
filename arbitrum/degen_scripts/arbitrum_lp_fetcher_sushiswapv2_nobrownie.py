@@ -4,7 +4,7 @@ import time
 import web3
 import web3.contract
 
-NODE_RPC_URI = "https://orbital-crimson-shard.arbitrum-mainnet.quiknode.pro/71607f5d9f8eb4616c99289a37a92cff9b772157/"
+NODE_RPC_URI = "http://localhost:8547"
 
 # starting # of blocks to request with getLogs
 BLOCK_SPAN = 5_000
@@ -94,18 +94,26 @@ for name, factory_address, filename, deployment_block in [
             # set the next start block
             start_block = end_block + 1
             failure = False
-
-            for event in pool_created_events:
-                lp_data.append(
-                    {
-                        "pool_address": event.args.get("pair"),
-                        "token0": event.args.get("token0"),
-                        "token1": event.args.get("token1"),
-                        "block_number": event.get("blockNumber"),
-                        "pool_id": event.args.get(""),
-                        "type": "SushiswapV2",
-                    }
-                )
+            
+            try:
+                for event in pool_created_events:
+                    lp_data.append(
+                        {
+                            "pool_address": event.args.get("pair"),
+                            "token0": event.args.get("token0"),
+                            "token1": event.args.get("token1"),
+                            "block_number": event.get("blockNumber"),
+                            "pool_id": event.args.get(""),
+                            "type": "SushiswapV2",
+                        }
+                    )
+                    
+            except AttributeError as e:
+                print(e)
+                print(event)
+                print(lp_data)
+                time.sleep(1)
+                continue
 
         if end_block == newest_block:
             break

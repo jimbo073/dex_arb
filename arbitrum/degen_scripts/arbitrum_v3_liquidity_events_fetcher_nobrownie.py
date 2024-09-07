@@ -1,3 +1,4 @@
+from socket import timeout
 import ujson
 from threading import Lock
 from typing import Dict
@@ -18,7 +19,7 @@ from degenbot.uniswap import (
 
 
 NODE_URI = "http://localhost:8547"
-w3 = web3.Web3(web3.HTTPProvider(NODE_URI))
+w3 = web3.Web3(web3.HTTPProvider(NODE_URI,request_kwargs={'timeout': 60}))
 if w3.is_connected() is False:
     sys.exit("Could not connect!")
 
