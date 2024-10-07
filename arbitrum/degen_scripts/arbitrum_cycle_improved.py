@@ -354,7 +354,7 @@ async def execute_arb_with_rpc(
             from_address=arb_contract.address
         )
     except bot.exceptions.ArbitrageError as e:
-        # print(f"(execute_arb_with_rpc) (generate_payloads): {e}")
+        print(f"(execute_arb_with_rpc) (generate_payloads): {e}")
         arbitrage.clear_best()
         return False
 
