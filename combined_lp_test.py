@@ -1,11 +1,12 @@
 import traceback
 import web3
-from web3.exceptions import Web3RPCError
 from CombinedLiquidityPool import CombinedLiquidityPool
-from degenbot.src import degenbot 
+import degenbot
+import json
 import time
 import asyncio
 import sys
+from degenbot.uniswap.types import UniswapV3BitmapAtWord,UniswapV3LiquidityAtTick
 sys.path.append(r'C:\Users\PC\Projects')
 
 
@@ -17,30 +18,93 @@ WBTC_ADDRESS = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
 
 CURVE_USDC_USDT_ADDRESS = "0x7f90122bf0700f9e7e1f688fe926940e8839f353"
 
-UNISWAP_V2_USDT_USDC_ADDRESS = "0x8165c70b01b7807351ef0c5ffd3ef010cabc16fb"
+UNISWAP_V2_POOL_ADDRESS = "0xcb0e5bfa72bbb4d16ab5aa0c60601c438f04b4ad"
 #UNISWAP_V2_WETH_WBTC_ADDRESS = "0x8c1D83A25eE2dA1643A5d937562682b1aC6C856B"
 #UNISWAP_V2_USDC_USDT_ADDRESS = "0xdeae1ff5282d83aadd42f85c57f6e69a037bf7cd"
 
-UNISWAP_V3_USDT_USDC_ADDRESS = "0xd1e1ac29b31b35646eabd77163e212b76fe3b6a2"
+UNISWAP_V3_POOL_ADDRESS = "0x641c00a822e8b671738d32a431a4fb6074e5c79d"
 
-_web3 = web3.Web3(web3.HTTPProvider("http://localhost:8547")) 
+_web3 = web3.Web3(web3.HTTPProvider("http://localhost:8547"))
 degenbot.config.set_web3(_web3)
 
 async def test_arb_calculation():
-    
     try:
-        uniswap_v2_usdc_usdt_lp = degenbot.UniswapV2Pool(UNISWAP_V2_USDT_USDC_ADDRESS)
-        tkn0out = uniswap_v2_usdc_usdt_lp.calculate_tokens_out_from_tokens_in(uniswap_v2_usdc_usdt_lp.token0,1000000000000000000,None)
-        tkn1out = uniswap_v2_usdc_usdt_lp.calculate_tokens_out_from_tokens_in(uniswap_v2_usdc_usdt_lp.token1,1000000000000000000,None)
-        print(tkn0out)
-        print(tkn1out)
+        print(_web3.eth.block_number)
+        weth= degenbot.Erc20Token(address=WETH_ADDRESS,chain_id=_web3.eth.chain_id,oracle_address="0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612")
+     
+        uniswap_v2_usdc_usdt_lp = degenbot.SushiswapV2Pool(UNISWAP_V2_POOL_ADDRESS)
+        
+        univ2pool = degenbot.UniswapV2Pool("0xd04bc65744306a5c149414dd3cd5c984d9d3470d")
+        camelot_lp = degenbot.CamelotLiquidityPool(_web3.to_checksum_address("0x97b192198d164c2a1834295e302b713bc32c8f1d"))
+       
         # uniswap_v2_weth_usdt_lp = LiquidityPool(UNISWAP_V2_WETH_USDT_ADDRESS)
+        liquidity_snapshot = {}
 
-        uniswap_v3_usdc_usdt_lp = degenbot.UniswapV3Pool(UNISWAP_V3_USDT_USDC_ADDRESS)
-        tkn0out = uniswap_v3_usdc_usdt_lp.calculate_tokens_out_from_tokens_in(uniswap_v3_usdc_usdt_lp.token0,1000000000000000000,None)
-        tkn1out = uniswap_v3_usdc_usdt_lp.calculate_tokens_out_from_tokens_in(uniswap_v3_usdc_usdt_lp.token1,1000000000000000000,None)
-        print(tkn0out)
-        print(tkn1out)
+        # update the snapshot to the block before our event watcher came online
+        try:
+            with open(r"C:\Users\PC\Projects\dex_arb\arbitrum\cryo_data\arbitrum\arbitrum_v3_liquidity_snapshot.json", "r") as file:
+                json_liquidity_snapshot = json.load(file)
+        except:
+            snapshot_last_block = None
+        else:
+            snapshot_last_block = json_liquidity_snapshot["snapshot_block"]
+            print(
+                f"Loaded LP snapshot: {len(json_liquidity_snapshot)} pools @ block {snapshot_last_block}"
+            )
+
+            for pool_address, snapshot in [
+                (k, v)
+                for k, v in json_liquidity_snapshot.items()
+                if k not in ["snapshot_block"]
+            ]:
+                liquidity_snapshot[pool_address] = {
+                    "tick_bitmap": {
+                        int(k): v for k, v in snapshot["tick_bitmap"].items()
+                    },
+                    "tick_data": {
+                        int(k): v for k, v in snapshot["tick_data"].items()
+                    },
+                }
+                try:
+                    snapshot_tick_data:UniswapV3LiquidityAtTick = liquidity_snapshot[pool_address][
+                        "tick_data"
+                    ]
+                except KeyError:
+                    snapshot_tick_data = {}
+
+                try:
+                    snapshot_tick_bitmap:UniswapV3BitmapAtWord = liquidity_snapshot[pool_address][
+                        "tick_bitmap"
+                    ]
+                except KeyError:
+                    snapshot_tick_bitmap = {}
+                
+        uniswap_v3_usdc_usdt_lp = degenbot.UniswapV3Pool(
+            UNISWAP_V3_POOL_ADDRESS,
+            tick_data=snapshot_tick_data,
+            tick_bitmap=snapshot_tick_bitmap)
+        sushiswap_v3_lp = degenbot.SushiswapV3Pool(
+            _web3.to_checksum_address("0x96ada81328abce21939a51d971a63077e16db26e"),
+            tick_data=snapshot_tick_data,
+            tick_bitmap=snapshot_tick_bitmap,
+        )
+        univ2tknout = univ2pool.calculate_tokens_out_from_tokens_in(sushiswap_v3_lp.token0,10*10**18,None)
+        print("univ2tknout", univ2tknout/10**uniswap_v3_usdc_usdt_lp.token1.decimals)
+        sushiv3tknout = sushiswap_v3_lp.calculate_tokens_out_from_tokens_in(sushiswap_v3_lp.token0,10*10**18,None)
+        print("sushiv3tknout", sushiv3tknout/10**uniswap_v3_usdc_usdt_lp.token1.decimals)
+        univ3tknout = uniswap_v3_usdc_usdt_lp.calculate_tokens_out_from_tokens_in(sushiswap_v3_lp.token0,1000*10**18,None)
+        print("univ3tknout", univ3tknout/10**uniswap_v3_usdc_usdt_lp.token1.decimals)
+
+        tkn0out = uniswap_v2_usdc_usdt_lp.calculate_tokens_out_from_tokens_in(uniswap_v3_usdc_usdt_lp.token0,10*(10**18),None)
+        print("tkn0out",tkn0out/10**uniswap_v3_usdc_usdt_lp.token1.decimals)
+        camelot_token_out = camelot_lp.calculate_tokens_out_from_tokens_in(
+            uniswap_v3_usdc_usdt_lp.token0,
+            10*(10**18),
+            None
+        )
+        print("camelot_token_out", camelot_token_out/10**camelot_lp.token1.decimals)
+        
+
         # uniswap_v2_weth_dai_lp = LiquidityPool(UNISWAP_V2_WETH_DAI_ADDRESS)
     
         # weth = degenbot.Erc20Token(WETH_ADDRESS)
@@ -48,65 +112,29 @@ async def test_arb_calculation():
         # wbtc = degenbot.Erc20Token(WBTC_ADDRESS)
         # usdc = degenbot.Erc20Token(USDC_ADDRESS)
         # usdt = degenbot.Erc20Token(USDT_ADDRESS)
-        curve_tripool = degenbot.CurveStableswapPool(address=CURVE_USDC_USDT_ADDRESS,chain_id=_web3.eth.chain_id)
-        tknout = curve_tripool.calculate_tokens_out_from_tokens_in(uniswap_v2_usdc_usdt_lp.token0,uniswap_v2_usdc_usdt_lp.token1,1000000000000000000,None,None)
-        print(tknout)
+        # curve_tripool = degenbot.CurveStableswapPool(address=CURVE_USDC_USDT_ADDRESS,chain_id=_web3.eth.chain_id)
+        # tknout = curve_tripool.calculate_tokens_out_from_tokens_in(uniswap_v2_usdc_usdt_lp.token0,uniswap_v2_usdc_usdt_lp.token1,1000000000000000000,None,None)
+        # print(tknout)
         combined_pool = CombinedLiquidityPool(
-            token_in=uniswap_v2_usdc_usdt_lp.token1,
-            token_out=uniswap_v2_usdc_usdt_lp.token0,
+            token_in=uniswap_v2_usdc_usdt_lp.token0,
+            token_out=uniswap_v2_usdc_usdt_lp.token1,
+            max_input=5000000000*10**uniswap_v2_usdc_usdt_lp.token0.decimals,
             pools_with_states=[
-                (curve_tripool,None),
+                # (curve_tripool,None),
                 (uniswap_v2_usdc_usdt_lp,None),
-                (uniswap_v3_usdc_usdt_lp,None)
+                (uniswap_v3_usdc_usdt_lp,None),
+                (camelot_lp,None),
+                (sushiswap_v3_lp,None),
+                (univ2pool,None)
                 ]
             )
-        best_result = await combined_pool.test_combinations(1000000000000000000)
+        
+        best_result = combined_pool.optimize_combined_swap(1000*10**18)
         print(best_result)
-        print("test")
-    except Exception as e: 
+        print("univ3tknout", univ3tknout/10**uniswap_v3_usdc_usdt_lp.token1.decimals)
+
+    except Exception as e:
         print(e)
         traceback.print_exc()
         
 asyncio.run(test_arb_calculation())
-
-    # weth = Erc20Token(WETH_ADDRESS)
-
-    # for swap_pools in [
-    #     (
-    #         uniswap_v2_weth_dai_lp, 
-    #         curve_tripool, 
-    #         uniswap_v2_weth_usdc_lp
-    #     ),
-    #     (
-    #         uniswap_v2_weth_dai_lp, 
-    #         curve_tripool, 
-    #         uniswap_v2_weth_usdt_lp
-    #     ),
-    #     (
-    #         uniswap_v2_weth_usdc_lp, 
-    #         curve_tripool, 
-    #         uniswap_v2_weth_dai_lp
-    #     ),
-    #     (
-    #         uniswap_v2_weth_usdc_lp, 
-    #         curve_tripool, 
-    #         uniswap_v2_weth_usdt_lp
-    #     ),
-    #     (
-    #         uniswap_v2_weth_usdt_lp, 
-    #         curve_tripool, 
-    #         uniswap_v2_weth_dai_lp
-    #     ),
-    #     (
-    #         uniswap_v2_weth_usdt_lp, 
-    #         curve_tripool, 
-    #         uniswap_v2_weth_usdc_lp
-    #     ),
-    # ]:
-    #     arb = UniswapCurveCycle(
-    #         input_token=weth,
-    #         swap_pools=swap_pools,
-    #         id="test",
-    #         max_input=10 * 10**18,
-    #     )
-    #     result = arb.calculate()
