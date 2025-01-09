@@ -129,8 +129,9 @@ async def test_arb_calculation():
                 ]
             )
         
-        best_result = combined_pool.optimize_combined_swap(1000*10**18)
-        print(best_result)
+        distribution,best_result = combined_pool.optimize_combined_swap(1000*10**18)
+        print("distribution: ",distribution)
+        print(best_result/10**uniswap_v3_usdc_usdt_lp.token1.decimals)
         print("univ3tknout", univ3tknout/10**uniswap_v3_usdc_usdt_lp.token1.decimals)
 
     except Exception as e:

@@ -41,6 +41,7 @@ from degenbot.arbitrage.types import (
     UniswapV3PoolSwapAmounts,
 )
 from CombinedLiquidityPool import CombinedLiquidityPool,CombinedSwapVector,CombinedSwapAmounts,CombinedLiquidityArbitrageCalculationResult
+from dex_arb.arbitrum import CombinedPoolStates
 SwapAmount: TypeAlias = (
     CurveStableSwapPoolSwapAmounts | UniswapV2PoolSwapAmounts | UniswapV3PoolSwapAmounts | CombinedSwapAmounts
 )
@@ -52,7 +53,9 @@ class CombinedArbitrage(AbstractLiquidityPool):
     def __init__(
         self,
         input_token: Erc20Token,
-        swap_pools: Iterable[AbstractLiquidityPool],
+        swap_pools: Iterable[
+            UniswapV2Pool | UniswapV3Pool | CurveStableswapPool | CombinedLiquidityPool
+            ],
         id: str,
         max_input: int | None = None,
     ):
@@ -85,7 +88,7 @@ class CombinedArbitrage(AbstractLiquidityPool):
 
         self.gas_estimate: int
         # Erstellen der Swap-Vektoren für den Arbitrage-Pfad
-        _swap_vectors: List[CombinedSwapVector | CurveStableSwapPoolVector | UniswapPoolSwapVector] = []
+        _swap_vectors: List[UniswapPoolSwapVector | CurveStableSwapPoolVector | CombinedSwapVector] = []
 
         for i, pool in enumerate(self.swap_pools):
             match pool:
@@ -121,44 +124,44 @@ class CombinedArbitrage(AbstractLiquidityPool):
                         )
                     )
 
-                case CurveStableswapPool():
-                    if i != 1:
-                        raise ValueError(f"Not implemented for Curve pools at position != 1, {i=}, {pool=}, {self.id=}")
+                # case CurveStableswapPool():
+                #     if i != 1:
+                #         raise ValueError(f"Not implemented for Curve pools at position != 1, {i=}, {pool=}, {self.id=}")
 
-                    token_in = token_out
+                #     token_in = token_out
                     
-                    next_pool = self.swap_pools[i + 1]
+                #     next_pool = self.swap_pools[i + 1]
                     
-                    if isinstance(next_pool, CombinedLiquidityPool):
-                        # Falls der nächste Pool ein CombinedLiquidityPool ist, extrahiere alle Tokens aus den darin enthaltenen Pools
-                        next_pool_tokens = set(chain.from_iterable(p[0].tokens for p in next_pool.pools)) 
-                    else:
-                        # Falls der nächste Pool ein einzelner Pool ist, wie in der bisherigen Implementierung
-                        next_pool_tokens = set(next_pool.tokens)
+                #     if isinstance(next_pool, CombinedLiquidityPool):
+                #         # Falls der nächste Pool ein CombinedLiquidityPool ist, extrahiere alle Tokens aus den darin enthaltenen Pools
+                #         next_pool_tokens = set(chain.from_iterable(p[0].tokens for p in next_pool.pools)) 
+                #     else:
+                #         # Falls der nächste Pool ein einzelner Pool ist, wie in der bisherigen Implementierung
+                #         next_pool_tokens = set(next_pool.tokens)
                     
-                    # Bestimme die gemeinsamen Tokens zwischen dem Curve Pool und dem nächsten Pool (oder den nächsten Pools)
-                    shared_tokens = list(set(pool.tokens).intersection(next_pool_tokens))
-                    assert len(shared_tokens) > 0, f"this: {pool.tokens}, next: {next_pool_tokens}"
+                #     # Bestimme die gemeinsamen Tokens zwischen dem Curve Pool und dem nächsten Pool (oder den nächsten Pools)
+                #     shared_tokens = list(set(pool.tokens).intersection(next_pool_tokens))
+                #     assert len(shared_tokens) > 0, f"this: {pool.tokens}, next: {next_pool_tokens}"
 
-                    token_out = shared_tokens[0]  # Wähle den ersten gemeinsamen Token aus
+                #     token_out = shared_tokens[0]  # Wähle den ersten gemeinsamen Token aus
                     
-                    _swap_vectors.append(
-                        CurveStableSwapPoolVector(token_in=token_in, token_out=token_out)
-                    )
+                #     _swap_vectors.append(
+                #         CurveStableSwapPoolVector(token_in=token_in, token_out=token_out)
+                #     )
 
                 case CombinedLiquidityPool(): # TODO <----------------------------------------------------------------------
                     token_in = token_out
-                    if i != 2:
+                    if i != len(self.swap_pools) - 1: # <----------------- TODO erweitern aauf den letzten pool von self.swap_pools
                         raise ValueError(f"Not implemented for Curve pools at position != 1, {i=}, {pool=}, {self.id=}")
                     # Der letzte Swap verwendet kombinierte Liquidität
                     _swap_vectors.append(
                         CombinedSwapVector(
-                            token_in=token_in, # token out from curve pool
+                            token_in=token_in, # token_out from pool before
                             token_out=self.input_token, # profit token
-                            pool_addresses=[p[0].address for p in pool.pools]  # List of all pool addresses in CombinedLiquidityPool
+                            involved_pools=[part_pool for part_pool in pool.pools] # List of all pool addresses in CombinedLiquidityPool
                         )
                     )
-
+                    
                 case _:  # pragma: no cover
                     raise ValueError("Pool type could not be identified")
                     
@@ -170,7 +173,7 @@ class CombinedArbitrage(AbstractLiquidityPool):
         overrides: Sequence[
             Tuple[
                 AbstractLiquidityPool,
-                AbstractPoolState | UniswapSimulationResult,
+                AbstractPoolState | UniswapSimulationResult | CombinedLiquidityPoolStates,
             ]
         ]
         | None,
@@ -201,33 +204,35 @@ class CombinedArbitrage(AbstractLiquidityPool):
                 logger.debug(f"Applying override {override.final_state} to {pool}")
                 sorted_overrides[pool.address] = override.final_state
 
-            elif isinstance(pool, CombinedLiquidityPool):
+            elif isinstance(
+                override,
+                CombinedLiquidityPoolStates
+            ):
                 # Falls es sich um einen CombinedLiquidityPool handelt, erstellen wir ein Objekt zum Speichern der Poolzustände
-                combined_pool_states = CombinedLiquidityPoolStates()
-
-                # Iteriere durch die Pools und deren Overrides im CombinedLiquidityPool
-                for p, state in zip(pool.pools, override):
-                    if isinstance(p[0], UniswapV2Pool | CamelotLiquidityPool) and isinstance(state, UniswapV2PoolState):
-                        # Uniswap V2 Pool State hinzufügen
-                        combined_pool_states.add_uniswap_v2_pool_state(
-                            pool_address=p[0].address,
-                            state=state,
-                        )
-                    elif isinstance(p[0], UniswapV3Pool) and isinstance(state, UniswapV3PoolState):
-                        # Uniswap V3 Pool State hinzufügen
-                        combined_pool_states.add_uniswap_v3_pool_state(
-                            pool_address=p[0].address,
-                            state=state,
-                        )
-                    elif isinstance(p[0], CurveStableswapPool) and isinstance(state, CurveStableswapPoolState):
-                        # Curve Pool State hinzufügen
-                        combined_pool_states.add_curve_pool_state(
-                            pool_address=p[0].address,
-                            state=state,
-                        )
+                match pool:
+                    case CombinedLiquidityPool(): 
+                        for part_pool, state in zip(pool.pools, override):
+                            if isinstance(part_pool, UniswapV2Pool | CamelotLiquidityPool) and isinstance(state, UniswapV2PoolState):
+                                # Uniswap V2 Pool State hinzufügen
+                                override.add_uniswap_v2_pool_state(
+                                    pool_address=part_pool.address,
+                                    state=state,
+                                )
+                            elif isinstance(part_pool, UniswapV3Pool) and isinstance(state, UniswapV3PoolState):
+                                # Uniswap V3 Pool State hinzufügen
+                                override.add_uniswap_v3_pool_state(
+                                    pool_address=part_pool.address,
+                                    state=state,
+                                )
+                            elif isinstance(part_pool, CurveStableswapPool) and isinstance(state, CurveStableswapPoolState):
+                                # Curve Pool State hinzufügen
+                                override.add_curve_pool_state(
+                                    pool_address=part_pool.address,
+                                    state=state,
+                                )
 
                 # Speichere den CombinedLiquidityPool in den Overrides
-                sorted_overrides[pool.address] = combined_pool_states
+                sorted_overrides[pool.address] = override
 
             else:
                 raise ValueError(f"Override for {pool} has unsupported type {type(override)}")
@@ -273,6 +278,9 @@ class CombinedArbitrage(AbstractLiquidityPool):
                     assert isinstance(swap_vector, CombinedSwapVector)
                     token_in = swap_vector.token_in
                     token_out = swap_vector.token_out
+                    
+                case _:  # pragma: no cover
+                    raise ValueError("Swap Vector could not be identified")
 
             if i == 0:
                 _token_in_quantity = token_in_quantity
@@ -312,8 +320,11 @@ class CombinedArbitrage(AbstractLiquidityPool):
 
                     case CombinedLiquidityPool():
                         # Verwende die `test_combinations` Methode, um den besten Output und die beste Verteilung zu finden
-                        best_output = pool.optimize_combined_swap(_token_in_quantity)
+                        distribution, best_output = pool.optimize_combined_swap(_token_in_quantity)
                         _token_out_quantity = best_output  # Der maximale Output durch die Kombination
+                    
+                    case _:  # pragma: no cover
+                        raise ValueError("Unsupported pool type",pool)
 
             except LiquidityPoolError as e:
                 raise ArbitrageError(f"(calculate_tokens_out_from_tokens_in): {e}")
@@ -374,10 +385,9 @@ class CombinedArbitrage(AbstractLiquidityPool):
                     pools_amounts_out.append(
                         CombinedSwapAmounts(
                             swap_amounts=[(_token_in_quantity, _token_out_quantity)],
-                            recipient=token_out.address,
                             total_input=_token_in_quantity,
                             total_output=_token_out_quantity,
-                            pool_combination_distribution=pool.distribution
+                            pool_combination_distribution=distribution
                         )
                     )
         return pools_amounts_out
@@ -386,7 +396,10 @@ class CombinedArbitrage(AbstractLiquidityPool):
     def _pre_calculation_check(
         self,
         override_state: Sequence[
-            Tuple[AbstractLiquidityPool, AbstractPoolState | UniswapSimulationResult]
+            Tuple[
+                AbstractLiquidityPool,
+                  AbstractPoolState | UniswapSimulationResult
+            ]
         ]
         | None = None,
     ) -> None:
@@ -397,7 +410,7 @@ class CombinedArbitrage(AbstractLiquidityPool):
 
         # Überprüfe jeden Pool auf Liquidität und berechne den Preis und die Gebühr für den Trade
         for pool, vector in zip(self.swap_pools, self._swap_vectors):
-            pool_state = state_overrides.get(pool.address) or pool.state
+            pool_state = state_overrides.get(pool.address) or pool.state | pool.states
 
             match pool:
                 case UniswapV2Pool() | CamelotLiquidityPool():
@@ -421,7 +434,7 @@ class CombinedArbitrage(AbstractLiquidityPool):
                     if pool_state.sqrt_price_x96 == 0:
                         raise NoLiquidity(f"V3 pool {pool.address} has no liquidity")
                     price = pool_state.sqrt_price_x96**2 / (2**192)
-                    fee = Fraction(pool._fee, 1000000)
+                    fee = Fraction(pool.fee, 1000000)
                     profit_factor *= (price if vector.zero_for_one else 1 / price) * (
                         (fee.denominator - fee.numerator) / fee.denominator
                     )
@@ -431,10 +444,26 @@ class CombinedArbitrage(AbstractLiquidityPool):
                     fee = Fraction(pool.fee, pool.FEE_DENOMINATOR)
                     profit_factor *= price * ((fee.denominator - fee.numerator) / fee.denominator)
 
-                case CombinedLiquidityPool(): #TODO ---------------------------------------------------------------------------------------------------------------------------------------------------
+                case CombinedLiquidityPool(): # TODO ---------------------------------------------------------------------------------------------------------------------------------------------------
                     # Da der CombinedLiquidityPool mehrere Pools kombiniert, müssen wir die Liquidität und Preise
                     # über alle Pools hinweg prüfen.
-                    price = pool.test_combinations(1)  # Teste die Liquidität mit einem kleinen Input
+                    if TYPE_CHECKING:
+                        assert isinstance(pool_state, CombinedLiquidityPoolStates)
+                        assert isinstance(vector, CombinedSwapVector)
+                    for part_pool, part_state in zip(pool.pools, pool.states):
+                        match part_pool, part_state:
+                            case UniswapV2Pool() | CamelotLiquidityPool(), UniswapV2PoolState():
+   
+                                if part_state.reserves_token0 == 0 or part_state.reserves_token1 == 0:
+                                    raise NoLiquidity(f"V2 pool {part_pool.address} has no liquidity")
+                                price = part_state.reserves_token1 / part_state.reserves_token0
+                                # TODO Token richtung identifizieren für den internen part swap von combined pools mit state override
+                                # if part_pool.token0 == ...
+                                fee = part_pool.fee_token0 if vector.zero_for_one else part_pool.fee_token1
+                                profit_factor *= (price if vector.zero_for_one else 1 / price) * (
+                                    (fee.denominator - fee.numerator) / fee.denominator
+                                )
+                     # Teste die Liquidität mit einem kleinen Input
                     profit_factor*= price
 
             # Falls der Profit-Faktor < 1.0 ist, ist der Trade nicht profitabel

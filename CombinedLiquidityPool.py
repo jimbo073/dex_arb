@@ -4,6 +4,7 @@ from degenbot import erc20_token
 from degenbot.camelot.pools import CamelotLiquidityPool
 from degenbot.curve.curve_stableswap_liquidity_pool import CurveStableswapPool
 from degenbot.erc20_token import Erc20Token
+from degenbot.uniswap.types import UniswapV3PoolState, UniswapV2PoolState
 from degenbot.uniswap.v2_liquidity_pool import UniswapV2Pool
 from degenbot.uniswap.v3_liquidity_pool import UniswapV3Pool
 from degenbot.exceptions import IncompleteSwap, DegenbotTypeError
@@ -15,8 +16,10 @@ import dataclasses
 from typing import List, Tuple, Union, Any, Dict, Iterable, Sequence
 import asyncio
 import sys
+import web3
+import scipy.optimize
 
-import scipy.optimize 
+from dex_arb.arbitrum.CombinedPoolStates import UniswapV2CombinedPoolState , UniswapV3CombinedPoolState, CurveCombinedPoolState
 sys.path.append(r'C:\Users\PC\Projects\degenbot')
 
 import degenbot
@@ -35,12 +38,11 @@ class CombinedLiquidityArbitrageCalculationResult(degenbot.ArbitrageCalculationR
 class CombinedSwapVector:
     token_in: degenbot.Erc20Token  # The input token for the swap
     token_out: degenbot.Erc20Token  # The output token for the swap
-    pool_addresses: List[str]  # List of addresses of the pools involved in the swap
+    involved_pools: List[AbstractLiquidityPool]  # List of the pools involved in the swap
 
 @dataclasses.dataclass(slots=True)
 class CombinedSwapAmounts:
     swap_amounts: List[Tuple[int, int]]  # List of input and output amounts for each swap
-    recipient: ChecksumAddress  # The address of the recipient
     total_input: int  # Total input amount for all swaps
     total_output: int  # Total output amount after all swaps
     pool_combination_distribution: Any  # Stores the distribution of liquidity across pools
@@ -51,32 +53,28 @@ class CombinedLiquidityPool(AbstractLiquidityPool):
         token_in: degenbot.Erc20Token,
         token_out: degenbot.Erc20Token,
         pools_with_states: Iterable[
-            tuple[degenbot.UniswapV2Pool | degenbot.CamelotLiquidityPool, degenbot.UniswapV2PoolState | None] |
-            tuple[degenbot.UniswapV3Pool, degenbot.UniswapV3PoolState | None] |
-            tuple[degenbot.CamelotLiquidityPool,degenbot.UniswapV2PoolState | None] |
-            tuple[degenbot.CurveStableswapPool, CurveStableswapPoolState | None]
+            tuple[UniswapV2Pool | CamelotLiquidityPool, UniswapV2PoolState | None] |
+            tuple[UniswapV3Pool, UniswapV3PoolState | None] |
+            tuple[CurveStableswapPool, CurveStableswapPoolState | None]
         ],
-        pools: Iterable[AbstractLiquidityPool] | None= None, 
         max_input: int | None = None,
         silent: bool = False
     ):
         self.token_in = token_in
         self.token_out = token_out
         self.max_input = max_input
-        self.pools = pools
+        self.pools: Iterable[UniswapV2Pool | CamelotLiquidityPool | UniswapV3Pool | CurveStableswapPool] = [pool_tuple[0] for pool_tuple in self.pools_with_states]
         self.pools_with_states = pools_with_states
+        self.states: Iterable[UniswapV2PoolState | UniswapV3PoolState | CurveStableswapPoolState] = [pool_tuple[1] for pool_tuple in self.pools_with_states]
         self.distribution = None
         self.silent = silent
         self.cache = collections.OrderedDict()  # Cache to store calculated outputs for better performance
         self.cache_max_size = 100  # Set a limit to the cache size
         self.cache_expiry_time = 300  # Cache entries expire after 300 seconds
         
-        if self.pools_with_states == None and self.pools == None:
+        if self.pools_with_states == None:
             raise ValueError("Either 'pools_with_states' or 'pools' must be provided!")
         
-        # Ensure that the input token is present in all provided pools
-        if self.pools == None and self.pools_with_states != None:
-            self.pools: Iterable[AbstractLiquidityPool] = [pool_tuple[0] for pool_tuple in self.pools_with_states]
         
         if self.distribution == None and self.silent == False:
             print("no distribution found! swap with a input dustribution to access value")
@@ -84,6 +82,15 @@ class CombinedLiquidityPool(AbstractLiquidityPool):
         for pool in self.pools:
             if self.token_in not in pool.tokens:
                 raise ValueError(f"Token {token_in.symbol} @ {token_in.address} is not in pool {pool.address} tokens! [Pool tokens: {pool.tokens}]")
+        
+        self.address = web3.Web3.keccak(
+                        hexstr="".join(
+                            [
+                                pool.address[2:]
+                                for pool in self.pools
+                            ]
+                        )
+                    ).hex()
 
         self.pool_states: Dict[ChecksumAddress, AbstractPoolState] = {}
         self._update_pool_states(self.pools)
@@ -173,7 +180,7 @@ class CombinedLiquidityPool(AbstractLiquidityPool):
         
         bounds = [
             (
-                0,
+                1,
                 min(maximum_input_balance,max_input_to_pool)
             )
             for max_input_to_pool in max_inputs
@@ -197,7 +204,7 @@ class CombinedLiquidityPool(AbstractLiquidityPool):
             },
             # method='SLSQP',
             # tol=1.0,
-            options={"disp": True},
+            options={"disp": True,}
         )
 
         end_time = time.time()
@@ -205,8 +212,16 @@ class CombinedLiquidityPool(AbstractLiquidityPool):
             print(f"Time taken for optimize_combined_swap: {end_time - start_time:.4f} seconds")
         print("Got results:")
         for i, swap_input in enumerate(result.x):
-            print(f"Swap {int(swap_input)/10**self.token_in.decimals} at pool {i}")
+            print(f"Swap {int(swap_input)/10**self.token_in.decimals} at pool {i}") 
+            
+        distribution = {}
+        for pool, swap_input in zip(self.pools , result.x):
+            print(f"Swap {int(swap_input)/10**self.token_in.decimals} at pool {pool.address}") 
+            distribution[pool.address] = int(swap_input)
+            
+
         print(f"Total input : {int(np.sum(result.x))/10**self.token_in.decimals} {self.token_in}")
         print(f"Total output: {int(-result.fun)/10**self.token_out.decimals} {self.token_out}")
         print(f"{np.sum(result.x)} <= {maximum_input_balance=}")
-        return int(np.sum(result.x)), int(-result.fun) /10**self.token_out.decimals
+        
+        return distribution, int(-result.fun)

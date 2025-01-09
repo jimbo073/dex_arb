@@ -1,4 +1,4 @@
-from typing import Union, Dict,List
+from typing import Sequence, Union, Dict,List
 from eth_typing import ChecksumAddress
 import dataclasses
 import degenbot
@@ -36,7 +36,7 @@ class CombinedLiquidityPoolStates:
     Diese Klasse speichert die Zustände für alle Pools im CombinedLiquidityPool.
     Verwende ein Dictionary, um die Zustände effizient nach Pool-Adresse zu speichern.
     """
-    pool_states: Dict[ChecksumAddress, Union[UniswapV2CombinedPoolState | UniswapV3CombinedPoolState | CurveCombinedPoolState]] = dataclasses.field(default_factory=dict)
+    pool_states: Dict[ChecksumAddress, Sequence[UniswapV2CombinedPoolState | UniswapV3CombinedPoolState | CurveCombinedPoolState]] = dataclasses.field(default_factory=dict)
     
     def add_uniswap_v2_pool_state(
         self, 
