@@ -1,13 +1,13 @@
 import traceback
 import web3
 from CombinedLiquidityPool import CombinedLiquidityPool
-import degenbot
 import json
 import time
 import asyncio
 import sys
-from degenbot.uniswap.types import UniswapV3BitmapAtWord,UniswapV3LiquidityAtTick
-sys.path.append(r'C:\Users\PC\Projects')
+import degenbot
+from degenbot.uniswap.v3_snapshot import UniswapV3BitmapAtWord, UniswapV3LiquidityAtTick
+sys.path.append(r'D:\Projects')
 
 WETH_ADDRESS = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
 DAI_ADDRESS = "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1"
@@ -38,7 +38,7 @@ async def test_arb_calculation():
 
         # update the snapshot to the block before our event watcher came online
         try:
-            with open(r"C:\Users\PC\Projects\dex_arb\arbitrum\cryo_data\arbitrum\arbitrum_v3_liquidity_snapshot.json", "r") as file:
+            with open(r"D:\Projects\dex_arb\arbitrum\cryo_data\arbitrum\arbitrum_v3_liquidity_snapshot.json", "r") as file:
                 json_liquidity_snapshot = json.load(file)
         except:
             snapshot_last_block = None
